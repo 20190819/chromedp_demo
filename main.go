@@ -3,63 +3,90 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/chromedp/cdproto/cdp"
+	"github.com/antchfx/htmlquery"
 	"github.com/chromedp/chromedp"
-	"github.com/davecgh/go-spew/spew"
-	"gorm.io/driver/mysql"
-	"gorm.io/gorm"
+	"github.com/pkg/errors"
 	"log"
 	"os"
+	"time"
 )
 
+var html string
+
+//var pages []string
+var fPath = "./reg.html"
+
+const targetURL = "https://www.ggcx.com/main/globalRegistrar"
+
 func main() {
-	connDB()
-	err := cdpHandler()
+	fmt.Println("start chromedp ...")
+	_, err := Spider()
 	if err != nil {
-		fmt.Println("cdp run err", err)
+		errors.Wrap(err, "internal err")
 	}
-	fmt.Println("main end")
 }
 
-func connDB() *gorm.DB {
-	dsn := fmt.Sprintf("%s:%s@tcp(localhost:3306)/%s?charset=utf8&parseTime=True&loc=Local",
-		"root", "888888", "crawl")
-	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{})
-	if err != nil {
-		os.Exit(-1)
-	}
-	return db
-}
-
-func createData() {
-	// todo
-}
-
-var trs []*cdp.Node
-
-func cdpHandler() error {
-	fmt.Println("cdpHandler")
-	opts := append(chromedp.DefaultExecAllocatorOptions[:], chromedp.Flag("headless", false))
-	alloc, cancel := chromedp.NewExecAllocator(context.Background(), opts...)
+func Spider() (context.Context, error) {
+	// 禁用chrome headless
+	opts := append(chromedp.DefaultExecAllocatorOptions[:],
+		chromedp.Flag("headless", false),
+	)
+	allocCtx, cancel := chromedp.NewExecAllocator(context.Background(), opts...)
 	defer cancel()
 	ctx, cancel := chromedp.NewContext(
-		alloc,
+		allocCtx,
 		chromedp.WithLogf(log.Printf),
 	)
 	defer cancel()
 
-	// 开启一个Chrome
 	err := chromedp.Run(
 		ctx,
-		chromedp.Navigate(`https://www.ggcx.com/main/globalRegistrar`),
-		chromedp.WaitVisible(`div[class="tabb"]`),
-		chromedp.Nodes(`.//tr`, &trs),
+		chromedp.Navigate(targetURL),
+		chromedp.WaitVisible(`//*[@id="main"]/div/div[3]/div[5]/table`),
+		chromedp.Sleep(time.Second),
+		chromedp.OuterHTML(`//*[@id="main"]/div/div[3]/div[5]/table`, &html),
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			for i := 1; i <= 3; i++ {
+				LoadDoc(html)
+				chromedp.Sleep(5 * time.Second).Do(ctx)
+				chromedp.Click(`//*[@id="main"]/div/div[3]/div[5]/div[3]/div/div[2]`).Do(ctx)
+				fmt.Println(`page+1`)
+
+			}
+			return nil
+		}),
 	)
-	for _,tr:=range trs{
-		spew.Dump(tr)
+	return ctx, err
+}
+
+func LoadDoc(html string) error {
+	fmt.Println("loadDoc", len(html))
+	var file *os.File
+	defer func() {
+		file.Close()
+		os.Remove(fPath)
+	}()
+	if _, err := os.Stat(fPath); err != nil {
+		if os.IsNotExist(err) {
+			// file does not exist
+			file, _ = os.Create(fPath)
+		}
 	}
+	n, err := file.WriteString(html)
 	if err != nil {
-		return err
+		fmt.Println("write err:", err)
+		os.Exit(-1)
+	}
+	fmt.Println("write n:",n)
+	doc, _ := htmlquery.LoadDoc(fPath)
+
+	trs := htmlquery.Find(doc, ".//tr")
+	for _, tr := range trs {
+		tds := htmlquery.Find(tr, ".//td")
+		for _, td := range tds {
+			fmt.Println(htmlquery.InnerText(td))
+		}
+		fmt.Println("=======")
 	}
 	return nil
 }
